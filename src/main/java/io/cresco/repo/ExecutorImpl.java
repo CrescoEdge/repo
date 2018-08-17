@@ -1,4 +1,4 @@
-package repo;
+package io.cresco.repo;
 
 import com.google.gson.Gson;
 import io.cresco.library.messaging.MsgEvent;
@@ -105,7 +105,7 @@ public class ExecutorImpl implements Executor {
         File repoDir = null;
         try {
 
-            String repoDirString =  plugin.getConfig().getStringParam("repo_dir","repo");
+            String repoDirString =  plugin.getConfig().getStringParam("repo_dir", "io/cresco/repo");
 
             File tmpRepo = new File(repoDirString);
             if(tmpRepo.isDirectory()) {

@@ -144,7 +144,7 @@
                         <Bundle-Description>Repo Plugin</Bundle-Description>
                         <Bundle-Vendor>Cresco.io</Bundle-Vendor>
                         <Bundle-Version>${project.version}-${maven.build.timestamp}</Bundle-Version>
-                        <Bundle-Activator>io.cresco.repo.Activator</Bundle-Activator>
+                        <Bundle-Activator>io.cresco.io.cresco.repo.Activator</Bundle-Activator>
                         <Import-Package>*;resolution:=optional</Import-Package>
                         <Embed-Dependency>!org.osgi.*;!osgi.cmpn.*;!library;*</Embed-Dependency>
                         <Bundle-RequiredExecutionEnvironment>JavaSE-1.8</Bundle-RequiredExecutionEnvironment>

@@ -1,4 +1,4 @@
-package repo;
+package io.cresco.repo;
 
 import org.osgi.framework.BundleActivator;
 import org.osgi.framework.BundleContext;
