@@ -7,7 +7,7 @@ addons:
 script:
 - mvn clean org.jacoco:jacoco-maven-plugin:prepare-agent install sonar:sonar
 after_success:
-- mvn bundle:bundle deploy --settings travis-settings.xml -DskipTests=true -B
+- mvn package bundle:bundle deploy --settings travis-settings.xml -DskipTests=true -B
 env:
   global:
   - SONATYPE_USERNAME=crescoedge
