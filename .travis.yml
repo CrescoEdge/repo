@@ -7,7 +7,7 @@ addons:
 script:
 - mvn clean org.jacoco:jacoco-maven-plugin:prepare-agent install sonar:sonar
 after_success:
-- mvn clean package bundle:bundle
+- mvn package bundle:bundle
 - mvn deploy:deploy-file -Dfile=target/repo-1.0-SNAPSHOT.jar -Durl=https://oss.sonatype.org/content/repositories/snapshots -DrepositoryId=ossrh -DpomFile=pom.xml --settings travis-settings.xml -DskipTests=true -B
 env:
   global:
