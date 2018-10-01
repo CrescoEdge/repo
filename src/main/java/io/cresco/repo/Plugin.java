@@ -41,6 +41,15 @@ public class Plugin implements PluginService {
         System.out.println("Modified Config Map PluginID:" + (String) map.get("pluginID"));
     }
 
+    @Deactivate
+    void deactivate(BundleContext context, Map<String,Object> map) {
+
+        isStopped();
+        this.context = null;
+        this.map = null;
+
+    }
+
     @Override
     public boolean inMsg(MsgEvent incoming) {
         pluginBuilder.msgIn(incoming);
