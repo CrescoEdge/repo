@@ -83,10 +83,14 @@ public class Plugin implements PluginService {
 
     @Override
     public boolean isStopped() {
-        pluginBuilder.setExecutor(null);
-        pluginBuilder.setIsActive(false);
+
+        if(pluginBuilder != null) {
+            pluginBuilder.setExecutor(null);
+            pluginBuilder.setIsActive(false);
+        }
         return true;
     }
+
 
 
 }
