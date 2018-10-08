@@ -7,6 +7,7 @@ import io.cresco.library.plugin.PluginBuilder;
 import io.cresco.library.utilities.CLogger;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -69,19 +70,25 @@ public class ExecutorImpl implements Executor {
 
     private MsgEvent repoList(MsgEvent msg) {
 
-        Map<String,List<Map<String,String>>> repoMap = new HashMap<>();
-        List<Map<String,String>> pluginInventory = null;
-        File repoDir = getRepoDir();
-        if(repoDir != null) {
-            pluginInventory = plugin.getPluginInventory(repoDir.getAbsolutePath());
+        try {
+            Map<String, List<Map<String, String>>> repoMap = new HashMap<>();
+            List<Map<String, String>> pluginInventory = null;
+            File repoDir = getRepoDir();
+            if (repoDir != null) {
+                pluginInventory = plugin.getPluginInventory(repoDir.getAbsolutePath());
+            }
+
+            repoMap.put("plugins", pluginInventory);
+
+            List<Map<String, String>> repoInfo = getRepoInfo();
+            repoMap.put("server", repoInfo);
+
+            msg.setCompressedParam("repolist", gson.toJson(repoMap));
+        }catch (Exception ex) {
+            logger.error(ex.getMessage());
         }
 
-        repoMap.put("plugins",pluginInventory);
 
-        List<Map<String,String>> repoInfo = getRepoInfo();
-        repoMap.put("server",repoInfo);
-
-        msg.setCompressedParam("repolist",gson.toJson(repoMap));
         return msg;
 
     }
