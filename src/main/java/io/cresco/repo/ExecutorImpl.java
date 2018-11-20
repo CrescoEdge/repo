@@ -112,7 +112,7 @@ public class ExecutorImpl implements Executor {
         File repoDir = null;
         try {
 
-            String repoDirString =  plugin.getConfig().getStringParam("repo_dir", "io/cresco/repo");
+            String repoDirString =  plugin.getConfig().getStringParam("repo_dir", "repo");
 
             File tmpRepo = new File(repoDirString);
             if(tmpRepo.isDirectory()) {
@@ -137,14 +137,6 @@ public class ExecutorImpl implements Executor {
             String pluginMD5 = incoming.getParam("md5");
             String pluginJarFile = incoming.getParam("jarfile");
             String pluginVersion = incoming.getParam("version");
-
-            /*
-            uploadMsg.setParam("pluginname", pluginName);
-            uploadMsg.setParam("md5", pluginMD5);
-            uploadMsg.setParam("jarFile", pluginJarFile);
-            uploadMsg.setParam("version", pluginVersion);
-            uploadMsg.setDataParam("jardata", java.nio.file.Files.readAllBytes(jarPath));
-            */
 
             if((pluginName != null) && (pluginMD5 != null) && (pluginJarFile != null) && (pluginVersion != null)) {
 
