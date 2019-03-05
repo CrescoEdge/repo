@@ -149,7 +149,7 @@ public class ExecutorImpl implements Executor {
                     String md5 = plugin.getJarMD5(jarFileSavePath);
                     if (pluginMD5.equals(md5)) {
                         incoming.setParam("uploaded", pluginName);
-
+                        remoteIfExist(pluginName);
                     }
                 }
             }
@@ -163,6 +163,44 @@ public class ExecutorImpl implements Executor {
         }
 
         return incoming;
+    }
+
+    private void remoteIfExist(String requestPluginName) {
+
+        File jarFile  = getPluginJarFile(requestPluginName);
+
+        if(jarFile != null) {
+            jarFile.delete();
+        }
+
+    }
+
+    private File getPluginJarFile(String requestPluginName) {
+        File jarFile = null;
+        try {
+
+                File repoDir = getRepoDir();
+                if (repoDir != null) {
+
+                    List<Map<String, String>> pluginInventory = plugin.getPluginInventory(getRepoDir().getAbsolutePath());
+                    for (Map<String, String> repoMap : pluginInventory) {
+
+                        if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
+                            String pluginName = repoMap.get("pluginname");
+                            String pluginMD5 = repoMap.get("md5");
+                            String pluginJarFile = repoMap.get("jarfile");
+
+                            if (pluginName.equals(requestPluginName)) {
+                                jarFile = new File(repoDir + "/" + pluginJarFile);
+                            }
+                        }
+                    }
+                }
+
+        } catch(Exception ex) {
+            ex.printStackTrace();
+        }
+        return jarFile;
     }
 
     private MsgEvent getPluginJar(MsgEvent incoming) {
