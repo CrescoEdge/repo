@@ -183,15 +183,17 @@ public class ExecutorImpl implements Executor {
                 if (repoDir != null) {
 
                     List<Map<String, String>> pluginInventory = plugin.getPluginInventory(getRepoDir().getAbsolutePath());
-                    for (Map<String, String> repoMap : pluginInventory) {
+                    if(pluginInventory != null) {
+                        for (Map<String, String> repoMap : pluginInventory) {
 
-                        if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
-                            String pluginName = repoMap.get("pluginname");
-                            String pluginMD5 = repoMap.get("md5");
-                            String pluginJarFile = repoMap.get("jarfile");
+                            if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
+                                String pluginName = repoMap.get("pluginname");
+                                String pluginMD5 = repoMap.get("md5");
+                                String pluginJarFile = repoMap.get("jarfile");
 
-                            if (pluginName.equals(requestPluginName)) {
-                                jarFile = new File(repoDir + "/" + pluginJarFile);
+                                if (pluginName.equals(requestPluginName)) {
+                                    jarFile = new File(repoDir + "/" + pluginJarFile);
+                                }
                             }
                         }
                     }
@@ -214,23 +216,24 @@ public class ExecutorImpl implements Executor {
                 if (repoDir != null) {
 
                     List<Map<String, String>> pluginInventory = plugin.getPluginInventory(getRepoDir().getAbsolutePath());
-                    for (Map<String, String> repoMap : pluginInventory) {
+                    if(pluginInventory != null) {
+                        for (Map<String, String> repoMap : pluginInventory) {
 
-                        if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
-                            String pluginName = repoMap.get("pluginname");
-                            String pluginMD5 = repoMap.get("md5");
-                            String pluginJarFile = repoMap.get("jarfile");
+                            if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
+                                String pluginName = repoMap.get("pluginname");
+                                String pluginMD5 = repoMap.get("md5");
+                                String pluginJarFile = repoMap.get("jarfile");
 
-                            if (pluginName.equals(requestPluginName) && pluginMD5.equals(requestPluginMD5)) {
+                                if (pluginName.equals(requestPluginName) && pluginMD5.equals(requestPluginMD5)) {
 
-                                Path jarPath = Paths.get(repoDir + "/" + pluginJarFile);
-                                incoming.setDataParam("jardata", java.nio.file.Files.readAllBytes(jarPath));
+                                    Path jarPath = Paths.get(repoDir + "/" + pluginJarFile);
+                                    incoming.setDataParam("jardata", java.nio.file.Files.readAllBytes(jarPath));
 
+                                }
                             }
+
                         }
-
                     }
-
                 }
             }
         } catch(Exception ex) {
