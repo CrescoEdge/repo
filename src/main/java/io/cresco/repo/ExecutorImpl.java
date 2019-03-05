@@ -151,9 +151,11 @@ public class ExecutorImpl implements Executor {
                     if (pluginMD5.equals(md5)) {
                         incoming.setParam("uploaded", pluginName);
 
-                        //remove old jar
-                        if(jarFile.exists()) {
-                            jarFile.delete();
+                        //remove old jar if exist
+                        if(jarFile != null) {
+                            if (jarFile.exists()) {
+                                jarFile.delete();
+                            }
                         }
 
                     }
