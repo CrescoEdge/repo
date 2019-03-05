@@ -133,13 +133,14 @@ public class ExecutorImpl implements Executor {
 
         try {
 
-
             String pluginName = incoming.getParam("pluginname");
             String pluginMD5 = incoming.getParam("md5");
             String pluginJarFile = incoming.getParam("jarfile");
             String pluginVersion = incoming.getParam("version");
 
             if((pluginName != null) && (pluginMD5 != null) && (pluginJarFile != null) && (pluginVersion != null)) {
+
+                File jarFile  = getPluginJarFile(pluginName);
 
                 String jarFileSavePath = getRepoDir().getAbsolutePath() + "/" + pluginJarFile;
                 Path path = Paths.get(jarFileSavePath);
@@ -149,7 +150,12 @@ public class ExecutorImpl implements Executor {
                     String md5 = plugin.getJarMD5(jarFileSavePath);
                     if (pluginMD5.equals(md5)) {
                         incoming.setParam("uploaded", pluginName);
-                        remoteIfExist(pluginName);
+
+                        //remove old jar
+                        if(jarFile.exists()) {
+                            jarFile.delete();
+                        }
+
                     }
                 }
             }
@@ -165,15 +171,7 @@ public class ExecutorImpl implements Executor {
         return incoming;
     }
 
-    private void remoteIfExist(String requestPluginName) {
 
-        File jarFile  = getPluginJarFile(requestPluginName);
-
-        if(jarFile != null) {
-            jarFile.delete();
-        }
-
-    }
 
     private File getPluginJarFile(String requestPluginName) {
         File jarFile = null;
