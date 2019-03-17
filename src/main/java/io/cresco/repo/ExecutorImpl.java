@@ -131,13 +131,14 @@ public class ExecutorImpl implements Executor {
 
         try {
 
-
             String pluginName = incoming.getParam("pluginname");
             String pluginMD5 = incoming.getParam("md5");
             String pluginJarFile = incoming.getParam("jarfile");
             String pluginVersion = incoming.getParam("version");
 
             if((pluginName != null) && (pluginMD5 != null) && (pluginJarFile != null) && (pluginVersion != null)) {
+
+                File jarFile  = getPluginJarFile(pluginName);
 
                 String jarFileSavePath = getRepoDir().getAbsolutePath() + "/" + pluginJarFile;
                 Path path = Paths.get(jarFileSavePath);
@@ -147,6 +148,13 @@ public class ExecutorImpl implements Executor {
                     String md5 = plugin.getJarMD5(jarFileSavePath);
                     if (pluginMD5.equals(md5)) {
                         incoming.setParam("uploaded", pluginName);
+
+                        //remove old jar if exist
+                        if(jarFile != null) {
+                            if (jarFile.exists()) {
+                                jarFile.delete();
+                            }
+                        }
 
                     }
                 }
@@ -163,6 +171,38 @@ public class ExecutorImpl implements Executor {
         return incoming;
     }
 
+
+
+    private File getPluginJarFile(String requestPluginName) {
+        File jarFile = null;
+        try {
+
+                File repoDir = getRepoDir();
+                if (repoDir != null) {
+
+                    List<Map<String, String>> pluginInventory = plugin.getPluginInventory(getRepoDir().getAbsolutePath());
+                    if(pluginInventory != null) {
+                        for (Map<String, String> repoMap : pluginInventory) {
+
+                            if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
+                                String pluginName = repoMap.get("pluginname");
+                                String pluginMD5 = repoMap.get("md5");
+                                String pluginJarFile = repoMap.get("jarfile");
+
+                                if (pluginName.equals(requestPluginName)) {
+                                    jarFile = new File(repoDir + "/" + pluginJarFile);
+                                }
+                            }
+                        }
+                    }
+                }
+
+        } catch(Exception ex) {
+            ex.printStackTrace();
+        }
+        return jarFile;
+    }
+
     private MsgEvent getPluginJar(MsgEvent incoming) {
 
         try {
@@ -174,23 +214,24 @@ public class ExecutorImpl implements Executor {
                 if (repoDir != null) {
 
                     List<Map<String, String>> pluginInventory = plugin.getPluginInventory(getRepoDir().getAbsolutePath());
-                    for (Map<String, String> repoMap : pluginInventory) {
+                    if(pluginInventory != null) {
+                        for (Map<String, String> repoMap : pluginInventory) {
 
-                        if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
-                            String pluginName = repoMap.get("pluginname");
-                            String pluginMD5 = repoMap.get("md5");
-                            String pluginJarFile = repoMap.get("jarfile");
+                            if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
+                                String pluginName = repoMap.get("pluginname");
+                                String pluginMD5 = repoMap.get("md5");
+                                String pluginJarFile = repoMap.get("jarfile");
 
-                            if (pluginName.equals(requestPluginName) && pluginMD5.equals(requestPluginMD5)) {
+                                if (pluginName.equals(requestPluginName) && pluginMD5.equals(requestPluginMD5)) {
 
-                                Path jarPath = Paths.get(repoDir + "/" + pluginJarFile);
-                                incoming.setDataParam("jardata", java.nio.file.Files.readAllBytes(jarPath));
+                                    Path jarPath = Paths.get(repoDir + "/" + pluginJarFile);
+                                    incoming.setDataParam("jardata", java.nio.file.Files.readAllBytes(jarPath));
 
+                                }
                             }
+
                         }
-
                     }
-
                 }
             }
         } catch(Exception ex) {
