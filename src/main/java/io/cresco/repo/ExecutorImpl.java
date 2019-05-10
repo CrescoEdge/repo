@@ -24,7 +24,6 @@ public class ExecutorImpl implements Executor {
         logger = plugin.getLogger(ExecutorImpl.class.getName(), CLogger.Level.Info);
         gson = new Gson();
 
-
     }
 
     @Override
