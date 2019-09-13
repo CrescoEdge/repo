@@ -26,7 +26,6 @@ public class ExecutorImpl implements Executor {
 
     }
 
-
     @Override
     public MsgEvent executeCONFIG(MsgEvent incoming) {
         return null;
@@ -140,23 +139,25 @@ public class ExecutorImpl implements Executor {
             if((pluginName != null) && (pluginMD5 != null) && (pluginJarFile != null) && (pluginVersion != null)) {
 
                 File jarFile  = getPluginJarFile(pluginName);
+                File repoDir = getRepoDir();
+                if(repoDir != null) {
+                    String jarFileSavePath = repoDir.getAbsolutePath() + "/" + pluginJarFile;
+                    Path path = Paths.get(jarFileSavePath);
+                    Files.write(path, incoming.getDataParam("jardata"));
+                    File jarFileSaved = new File(jarFileSavePath);
+                    if (jarFileSaved.isFile()) {
+                        String md5 = plugin.getMD5(jarFileSavePath);
+                        if (pluginMD5.equals(md5)) {
+                            incoming.setParam("uploaded", pluginName);
 
-                String jarFileSavePath = getRepoDir().getAbsolutePath() + "/" + pluginJarFile;
-                Path path = Paths.get(jarFileSavePath);
-                Files.write(path, incoming.getDataParam("jardata"));
-                File jarFileSaved = new File(jarFileSavePath);
-                if (jarFileSaved.isFile()) {
-                    String md5 = plugin.getMD5(jarFileSavePath);
-                    if (pluginMD5.equals(md5)) {
-                        incoming.setParam("uploaded", pluginName);
-
-                        //remove old jar if exist
-                        if(jarFile != null) {
-                            if (jarFile.exists()) {
-                                jarFile.delete();
+                            //remove old jar if exist
+                            if (jarFile != null) {
+                                if (jarFile.exists()) {
+                                    jarFile.delete();
+                                }
                             }
-                        }
 
+                        }
                     }
                 }
             }
@@ -182,7 +183,7 @@ public class ExecutorImpl implements Executor {
                 File repoDir = getRepoDir();
                 if (repoDir != null) {
 
-                    List<Map<String, String>> pluginInventory = plugin.getPluginInventory(getRepoDir().getAbsolutePath());
+                    List<Map<String, String>> pluginInventory = plugin.getPluginInventory(repoDir.getAbsolutePath());
                     if(pluginInventory != null) {
                         for (Map<String, String> repoMap : pluginInventory) {
 
@@ -215,7 +216,7 @@ public class ExecutorImpl implements Executor {
                 File repoDir = getRepoDir();
                 if (repoDir != null) {
 
-                    List<Map<String, String>> pluginInventory = plugin.getPluginInventory(getRepoDir().getAbsolutePath());
+                    List<Map<String, String>> pluginInventory = plugin.getPluginInventory(repoDir.getAbsolutePath());
                     if(pluginInventory != null) {
                         for (Map<String, String> repoMap : pluginInventory) {
 
