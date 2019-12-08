@@ -111,6 +111,8 @@ public class ExecutorImpl implements Executor {
         try {
 
             String repoDirString = plugin.getPluginDataDirectory() + "/" + plugin.getConfig().getStringParam("repo_dir", "repo");
+            //make all directories
+            Paths.get(repoDirString).toFile().mkdirs();
 
             File tmpRepo = new File(repoDirString);
             if(tmpRepo.isDirectory()) {
