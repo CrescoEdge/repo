@@ -89,6 +89,7 @@ public class Plugin implements PluginService {
             ex.printStackTrace();
             return false;
         }
+
     }
 
     @Override
