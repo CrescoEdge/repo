@@ -32,7 +32,6 @@
         </repository>
     </distributionManagement>
 
-
     <scm>
         <connection>scm:git:git://github.com/CrescoEdge/repo.git</connection>
         <developerConnection>scm:git:git://github.com/CrescoEdge/repo.git</developerConnection>
