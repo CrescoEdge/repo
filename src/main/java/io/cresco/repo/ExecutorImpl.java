@@ -151,6 +151,7 @@ public class ExecutorImpl implements Executor {
                         String md5 = plugin.getMD5(jarFileSavePath);
                         if (pluginMD5.equals(md5)) {
                             incoming.setParam("uploaded", pluginName);
+                            incoming.setParam("md5-confirm", md5);
 
                             //remove old jar if exist
                             if (jarFile != null) {
