@@ -55,7 +55,6 @@ public class ExecutorImpl implements Executor {
                     return getPluginJar(incoming);
                 case "putjar":
                     return putPluginJar(incoming);
-
             }
         }
         return null;
