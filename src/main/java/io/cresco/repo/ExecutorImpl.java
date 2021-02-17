@@ -134,7 +134,8 @@ public class ExecutorImpl implements Executor {
 
             String pluginName = incoming.getParam("pluginname");
             String pluginMD5 = incoming.getParam("md5");
-            String pluginJarFile = incoming.getParam("jarfile");
+            //String pluginJarFile = incoming.getParam("jarfile");
+            String pluginJarFile = incoming.getParam("md5");
             String pluginVersion = incoming.getParam("version");
 
             if((pluginName != null) && (pluginMD5 != null) && (pluginJarFile != null) && (pluginVersion != null)) {
