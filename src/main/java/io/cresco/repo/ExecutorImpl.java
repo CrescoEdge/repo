@@ -6,18 +6,27 @@ import io.cresco.library.plugin.Executor;
 import io.cresco.library.plugin.PluginBuilder;
 import io.cresco.library.utilities.CLogger;
 
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
+import java.net.JarURLConnection;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.jar.Attributes;
+import java.util.jar.JarInputStream;
+import java.util.jar.Manifest;
 
 public class ExecutorImpl implements Executor {
 
     private PluginBuilder plugin;
     private CLogger logger;
     private Gson gson;
+    private AtomicBoolean lockRepo = new AtomicBoolean();
+
 
     public ExecutorImpl(PluginBuilder pluginBuilder) {
         this.plugin = pluginBuilder;
@@ -50,11 +59,17 @@ public class ExecutorImpl implements Executor {
             switch (incoming.getParam("action")) {
 
                 case "repolist":
-                    return repoList(incoming);
+                    synchronized (lockRepo) {
+                        return repoList(incoming);
+                    }
                 case "getjar":
-                    return getPluginJar(incoming);
+                    synchronized (lockRepo) {
+                        return getPluginJar(incoming);
+                    }
                 case "putjar":
-                    return putPluginJar(incoming);
+                    synchronized (lockRepo) {
+                        return putPluginJar(incoming);
+                    }
             }
         }
         return null;
@@ -72,23 +87,269 @@ public class ExecutorImpl implements Executor {
             List<Map<String, String>> pluginInventory = null;
             File repoDir = getRepoDir();
             if (repoDir != null) {
-                pluginInventory = plugin.getPluginInventory(repoDir.getAbsolutePath());
+                pluginInventory = getPluginInventory(repoDir.getAbsolutePath());
+
             }
 
             repoMap.put("plugins", pluginInventory);
 
             List<Map<String, String>> repoInfo = getRepoInfo();
             repoMap.put("server", repoInfo);
-
             msg.setCompressedParam("repolist", gson.toJson(repoMap));
         }catch (Exception ex) {
-            logger.error(ex.getMessage());
+            logger.error("repoList error" + ex.toString());
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw);
+            ex.printStackTrace(pw);
+            logger.error(pw.toString());
         }
-
 
         return msg;
 
     }
+    //import
+    public List<Map<String,String>> getPluginInventory(String repoPath) {
+        List<Map<String,String>> pluginFiles = null;
+        try
+        {
+            File folder = new File(repoPath);
+            if(folder.exists())
+            {
+                pluginFiles = new ArrayList<>();
+                File[] listOfFiles = folder.listFiles();
+
+                logger.error("LIST OF FILES: " + listOfFiles.length);
+
+                for (int i = 0; i < listOfFiles.length; i++)
+                {
+                    if (listOfFiles[i].isFile())
+                    {
+                        try{
+                            String jarPath = listOfFiles[i].getAbsolutePath();
+                            String jarFileName = listOfFiles[i].getName();
+                            String pluginName = getPluginName(jarPath);
+                            String pluginMD5 = getMD5(jarPath);
+                            String pluginVersion = getPluginVersion(jarPath);
+
+                            Map<String,String> pluginMap = new HashMap<>();
+                            pluginMap.put("pluginname",pluginName);
+                            pluginMap.put("jarfile",jarFileName);
+                            pluginMap.put("md5",pluginMD5);
+                            pluginMap.put("version",pluginVersion);
+                            pluginFiles.add(pluginMap);
+                        } catch(Exception ex) {
+                            ex.printStackTrace();
+                            logger.error("getPluginInventory sub" + ex.toString());
+                            StringWriter sw = new StringWriter();
+                            PrintWriter pw = new PrintWriter(sw);
+                            ex.printStackTrace(pw);
+                            logger.error(pw.toString());
+                        }
+
+                    }
+
+                }
+                if(pluginFiles.isEmpty())
+                {
+                    pluginFiles = null;
+                }
+            }
+        }
+        catch(Exception ex)
+        {
+            pluginFiles = null;
+            logger.error("getPluginInventory" + ex.toString());
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw);
+            ex.printStackTrace(pw);
+            logger.error(pw.toString());
+        }
+        return pluginFiles;
+    }
+
+    public String getPluginName(String jarFile) {
+        String version = null;
+
+        try{
+            File file = new File(jarFile);
+
+            boolean calcHash = true;
+            BasicFileAttributes attr = Files.readAttributes(file.toPath(), BasicFileAttributes.class);
+            long fileTime = attr.creationTime().toMillis();
+
+            FileInputStream fis = null;
+            JarInputStream jarStream = null;
+
+            try {
+
+                fis = new FileInputStream(file);
+                jarStream = new JarInputStream(fis);
+                Manifest mf = jarStream.getManifest();
+                if (mf != null) {
+                    Attributes mainAttribs = mf.getMainAttributes();
+                    if (mainAttribs != null) {
+                        version = mainAttribs.getValue("Bundle-SymbolicName");
+                    }
+                }
+            } catch(Exception ex) {
+                ex.printStackTrace();
+            } finally {
+
+                if(jarStream != null) {
+                    jarStream.close();
+                }
+
+                if(fis != null) {
+                    fis.close();
+                }
+            }
+        }
+        catch(Exception ex)
+        {
+            ex.printStackTrace();
+        }
+        return version;
+    }
+
+    public String getPluginVersion(String jarFile) {
+        String version = null;
+        try{
+            File file = new File(jarFile);
+
+            boolean calcHash = true;
+            BasicFileAttributes attr = Files.readAttributes(file.toPath(), BasicFileAttributes.class);
+            long fileTime = attr.creationTime().toMillis();
+
+            FileInputStream fis = null;
+            JarInputStream jarStream = null;
+
+            try {
+                fis = new FileInputStream(file);
+                jarStream = new JarInputStream(fis);
+                Manifest mf = jarStream.getManifest();
+
+                if (mf != null) {
+                    Attributes mainAttribs = mf.getMainAttributes();
+                    if (mainAttribs != null) {
+                        version = mainAttribs.getValue("Bundle-Version");
+                    }
+                }
+            } catch(Exception ex) {
+                ex.printStackTrace();
+            } finally {
+
+                if(jarStream != null) {
+                    jarStream.close();
+                }
+
+                if(fis != null) {
+                    fis.close();
+                }
+            }
+        }
+        catch(Exception ex)
+        {
+            ex.printStackTrace();
+
+        }
+        return version;
+    }
+
+    public String getMD5(InputStream inputStream) {
+        String hashString = null;
+        try {
+
+            if(inputStream != null) {
+
+                MessageDigest digest = MessageDigest.getInstance("MD5");
+
+                //Create byte array to read data in chunks
+                byte[] byteArray = new byte[1024];
+                int bytesCount = 0;
+
+                //Read file data and update in message digest
+                while ((bytesCount = inputStream.read(byteArray)) != -1) {
+                    digest.update(byteArray, 0, bytesCount);
+                }
+                ;
+
+                //close the stream; We don't need it now.
+                inputStream.close();
+
+                //Get the hash's bytes
+                byte[] bytes = digest.digest();
+
+                //This bytes[] has bytes in decimal format;
+                //Convert it to hexadecimal format
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < bytes.length; i++) {
+                    sb.append(Integer.toString((bytes[i] & 0xff) + 0x100, 16).substring(1));
+                }
+
+                hashString = sb.toString();
+            }
+
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        //return complete hash
+        return hashString;
+    }
+
+    public String getMD5(String jarLocation) {
+        String hashString = null;
+        try {
+
+            if(jarLocation.startsWith("jar:")) {
+
+                URL inputURL = null;
+                InputStream in = null;
+
+
+                inputURL = new URL(jarLocation);
+                JarURLConnection conn = (JarURLConnection)inputURL.openConnection();
+                in = conn.getInputStream();
+
+                if(in != null) {
+                    hashString = getMD5(in);
+                }
+
+
+            } else {
+
+                InputStream inputStream = null;
+
+                if(jarLocation.contains("!")) {
+                    URL fileURL = getClass().getClassLoader().getResource(jarLocation);
+                    if (fileURL != null) {
+                        inputStream = getClass().getClassLoader().getResourceAsStream(fileURL.getPath());
+                    }
+
+                } else {
+
+                    if(jarLocation.startsWith("file:")) {
+                        jarLocation = jarLocation.replace("file:","");
+                    }
+                    Path checkPath = Paths.get(jarLocation);
+
+                    if (checkPath.toFile().exists()) {
+                        inputStream = new FileInputStream(jarLocation);
+                    }
+                }
+
+                if (inputStream != null) {
+                    hashString = getMD5(inputStream);
+                }
+
+            }
+
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        //return complete hash
+        return hashString;
+    }
+    //end import
 
     private List<Map<String,String>> getRepoInfo() {
         List<Map<String,String>> repoInfo = null;
@@ -152,14 +413,6 @@ public class ExecutorImpl implements Executor {
                         if (pluginMD5.equals(md5)) {
                             incoming.setParam("uploaded", pluginName);
                             incoming.setParam("md5-confirm", md5);
-
-                            //remove old jar if exist
-                            if (jarFile != null) {
-                                if (jarFile.exists()) {
-                                    jarFile.delete();
-                                }
-                            }
-
                         }
                     }
                 }
