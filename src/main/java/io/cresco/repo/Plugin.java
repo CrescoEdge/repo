@@ -47,7 +47,6 @@ public class Plugin implements PluginService {
         isStopped();
         this.context = null;
         this.map = null;
-
     }
 
     @Override
