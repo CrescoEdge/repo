@@ -149,11 +149,11 @@ public class ExecutorImpl implements Executor {
 
         try {
 
+
             String pluginName = incoming.getParam("pluginname");
             String pluginMD5 = incoming.getParam("md5");
             String pluginJarFile = incoming.getParam("jarfile");
             String pluginVersion = incoming.getParam("version");
-
 
             if((pluginName != null) && (pluginMD5 != null) && (pluginJarFile != null) && (pluginVersion != null)) {
 
@@ -169,14 +169,27 @@ public class ExecutorImpl implements Executor {
                         if (pluginMD5.equals(md5)) {
                             incoming.setParam("uploaded", pluginName);
                             incoming.setParam("md5-confirm", md5);
+                        } else {
+                            logger.error("MD5 hash not matched");
+                            logger.error("incoming MD5: " + pluginMD5 + " calculated MD5: " + md5);
                         }
+                    } else {
+                        logger.error("putPluginJar !jarFileSaved.isFile()");
                     }
+                } else {
+                    logger.error("putPluginJar repoDir != null");
                 }
+            } else {
+                logger.error("putPluginJar: Missing data!");
             }
 
 
         } catch(Exception ex){
-            ex.printStackTrace();
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw);
+            ex.printStackTrace(pw);
+            logger.error("putPluginJar: " + ex.toString());
+            logger.error(pw.toString());
         }
 
         if(incoming.getParams().containsKey("jardata")) {
