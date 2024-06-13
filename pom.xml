@@ -6,7 +6,7 @@
 
     <groupId>io.cresco</groupId>
     <artifactId>repo</artifactId>
-    <version>1.1-SNAPSHOT</version>
+    <version>1.2-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>Cresco Repo</name>
