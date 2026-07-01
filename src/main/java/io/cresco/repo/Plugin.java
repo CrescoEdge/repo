@@ -9,6 +9,8 @@ import io.cresco.library.plugin.PluginService;
 import io.cresco.library.utilities.CLogger;
 import org.osgi.framework.BundleContext;
 import org.osgi.service.component.annotations.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 
@@ -26,6 +28,8 @@ public class Plugin implements PluginService {
     private PluginBuilder pluginBuilder;
     private Executor executor;
     private CLogger logger;
+    // SLF4J fallback for lifecycle paths where the CLogger is null (before start).
+    private static final Logger slog = LoggerFactory.getLogger(Plugin.class);
     private Map<String,Object> map;
 
     @Activate
@@ -38,7 +42,11 @@ public class Plugin implements PluginService {
 
     @Modified
     void modified(BundleContext context, Map<String,Object> map) {
-        System.out.println("Modified Config Map PluginID:" + (String) map.get("pluginID"));
+        if (logger != null) {
+            logger.info("Modified Config Map PluginID:" + (String) map.get("pluginID"));
+        } else {
+            slog.info("Modified Config Map PluginID:" + (String) map.get("pluginID"));
+        }
     }
 
     @Deactivate
@@ -85,7 +93,11 @@ public class Plugin implements PluginService {
             }
             return true;
         } catch(Exception ex) {
-            ex.printStackTrace();
+            if (logger != null) {
+                logger.error("isStarted() failed", ex);
+            } else {
+                slog.error("isStarted() failed", ex);
+            }
             return false;
         }
 

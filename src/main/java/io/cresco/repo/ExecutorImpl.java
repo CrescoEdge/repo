@@ -89,11 +89,7 @@ public class ExecutorImpl implements Executor {
             repoMap.put("server", repoInfo);
             msg.setCompressedParam("repolist", gson.toJson(repoMap));
         }catch (Exception ex) {
-            logger.error("repoList error" + ex.toString());
-            StringWriter sw = new StringWriter();
-            PrintWriter pw = new PrintWriter(sw);
-            ex.printStackTrace(pw);
-            logger.error(pw.toString());
+            logger.error("repoList error", ex);
         }
 
         return msg;
@@ -110,7 +106,7 @@ public class ExecutorImpl implements Executor {
             repoMap.put("pluginid",plugin.getPluginID());
             repoInfo.add(repoMap);
         } catch(Exception ex) {
-            ex.printStackTrace();
+            logger.error("getRepoInfo error", ex);
         }
         return repoInfo;
     }
@@ -132,7 +128,7 @@ public class ExecutorImpl implements Executor {
             }
 
         } catch(Exception ex) {
-            ex.printStackTrace();
+            logger.error("getRepoDir error", ex);
         }
         return repoDir;
     }
@@ -178,11 +174,7 @@ public class ExecutorImpl implements Executor {
 
 
         } catch(Exception ex){
-            StringWriter sw = new StringWriter();
-            PrintWriter pw = new PrintWriter(sw);
-            ex.printStackTrace(pw);
-            logger.error("putPluginJar: " + ex.toString());
-            logger.error(pw.toString());
+            logger.error("putPluginJar error", ex);
         }
 
         if(incoming.getParams().containsKey("jardata")) {
@@ -219,7 +211,7 @@ public class ExecutorImpl implements Executor {
                 }
 
         } catch(Exception ex) {
-            ex.printStackTrace();
+            logger.error("getPluginJarFile error", ex);
         }
         return jarFile;
     }
@@ -256,7 +248,7 @@ public class ExecutorImpl implements Executor {
                 }
             }
         } catch(Exception ex) {
-            ex.printStackTrace();
+            logger.error("getPluginJar error", ex);
         }
         return incoming;
     }
