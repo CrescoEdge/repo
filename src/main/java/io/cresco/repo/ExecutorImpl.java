@@ -1,6 +1,7 @@
 package io.cresco.repo;
 
 import com.google.gson.Gson;
+import io.cresco.library.capability.*;
 import io.cresco.library.messaging.MsgEvent;
 import io.cresco.library.metrics.CMetric;
 import io.cresco.library.metrics.MeasurementEngine;
@@ -15,6 +16,45 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+@CrescoCapabilities(namespace = "repo", target = "plugin",
+        routingParams = {"region", "agent", "pluginid"},
+        summary = "Plugin repository: lists/serves/stores plugin JARs for the fabric, plus repo inventory metrics.")
+@CrescoActions({
+    @CrescoAction(name = "repolist",
+        summary = "List every plugin JAR in this repo (name, md5, jar file) plus this repo's server identity.",
+        why = "Use to discover which plugins are available to deploy and their md5 for integrity-checked pulls.",
+        returns = @CrescoReturn(name = "repolist", type = "object", compressed = true, description = "compressed JSON: {plugins:[{pluginname,md5,jarfile}], server:[{region,agent,pluginid}]}")),
+    @CrescoAction(name = "getjar",
+        summary = "Retrieve a plugin JAR's bytes by plugin name + md5.",
+        why = "Use to fetch a specific plugin artifact for deployment or caching.",
+        params = {
+            @CrescoParam(name = "action_pluginname", required = true, description = "plugin symbolic name, e.g. io.cresco.sysinfo"),
+            @CrescoParam(name = "action_pluginmd5", required = true, description = "md5 of the desired jar (integrity + version select)")
+        },
+        returns = @CrescoReturn(name = "jardata", type = "binary", description = "raw jar bytes (present only if found)")),
+    @CrescoAction(name = "putjar",
+        summary = "Store a plugin JAR into this repo (writes to disk, verifies md5).",
+        why = "Use to publish/replicate a plugin artifact into a repo instance.",
+        params = {
+            @CrescoParam(name = "pluginname", required = true, description = "plugin symbolic name"),
+            @CrescoParam(name = "md5", required = true, description = "expected md5 of the jar"),
+            @CrescoParam(name = "jarfile", required = true, description = "target jar file name"),
+            @CrescoParam(name = "version", description = "plugin version"),
+            @CrescoParam(name = "jardata", type = "binary", required = true, description = "raw jar bytes")
+        },
+        returns = {
+            @CrescoReturn(name = "uploaded", type = "boolean", description = "true if stored"),
+            @CrescoReturn(name = "md5-confirm", description = "md5 of the stored jar")
+        }),
+    @CrescoAction(name = "getmetrics",
+        summary = "Return repo inventory metrics (plugin count, total bytes on disk) as MeasurementEngine gauges JSON.",
+        why = "Standard cross-bundle metrics contract; folded into getmetricinventory.",
+        returns = @CrescoReturn(name = "metrics", type = "object", description = "getAllMetrics() JSON")),
+    @CrescoAction(name = "getcapabilities",
+        summary = "Return this plugin's self-describing capability document (its message actions as LLM tool specs).",
+        why = "Discovery: lets a client/LLM learn what this plugin can do and how to call it.",
+        returns = @CrescoReturn(name = "capabilities", type = "object", description = "CapabilityDocument JSON"))
+})
 public class ExecutorImpl implements Executor {
 
     private PluginBuilder plugin;
@@ -97,6 +137,8 @@ public class ExecutorImpl implements Executor {
                     incoming.setParam("metrics", getMetricsJson());
                     incoming.setParam("status", "10");
                     return incoming;
+                case "getcapabilities":
+                    return CapabilityResponder.respond(incoming, this);
             }
         }
         return null;
