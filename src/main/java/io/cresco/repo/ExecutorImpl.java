@@ -2,6 +2,8 @@ package io.cresco.repo;
 
 import com.google.gson.Gson;
 import io.cresco.library.messaging.MsgEvent;
+import io.cresco.library.metrics.CMetric;
+import io.cresco.library.metrics.MeasurementEngine;
 import io.cresco.library.plugin.Executor;
 import io.cresco.library.plugin.PluginBuilder;
 import io.cresco.library.utilities.CLogger;
@@ -20,12 +22,39 @@ public class ExecutorImpl implements Executor {
     private Gson gson;
     private AtomicBoolean lockRepo = new AtomicBoolean();
 
+    // B-2 unified metrics: repository inventory size / on-disk footprint as MeasurementEngine gauges.
+    private MeasurementEngine metricEngine;
 
     public ExecutorImpl(PluginBuilder pluginBuilder) {
         this.plugin = pluginBuilder;
         logger = plugin.getLogger(ExecutorImpl.class.getName(), CLogger.Level.Info);
         gson = new Gson();
 
+    }
+
+    private synchronized String getMetricsJson() {
+        try {
+            if (metricEngine == null) {
+                metricEngine = new MeasurementEngine(plugin);
+                metricEngine.setGauge("repo.plugin.count", "plugin jars in the local repository", "repo", CMetric.MeasureClass.GAUGE_INT);
+                metricEngine.setGauge("repo.bytes", "total size of repository jars on disk", "repo", CMetric.MeasureClass.GAUGE_LONG);
+            }
+            int count = 0;
+            long bytes = 0L;
+            File repoDir = getRepoDir();
+            if (repoDir != null) {
+                List<Map<String, String>> inv = plugin.getPluginInventory(repoDir.getAbsolutePath());
+                if (inv != null) { count = inv.size(); }
+                File[] files = repoDir.listFiles((d, n) -> n.toLowerCase().endsWith(".jar"));
+                if (files != null) { for (File f : files) { bytes += f.length(); } }
+            }
+            metricEngine.updateIntGauge("repo.plugin.count", count);
+            metricEngine.updateLongGauge("repo.bytes", bytes);
+            return gson.toJson(metricEngine.getAllMetrics());
+        } catch (Exception ex) {
+            logger.error("getMetricsJson() " + ex.getMessage(), ex);
+            return "{}";
+        }
     }
 
     @Override
@@ -63,6 +92,11 @@ public class ExecutorImpl implements Executor {
                     synchronized (lockRepo) {
                         return putPluginJar(incoming);
                     }
+                case "getmetrics":
+                    // B-2 unified metrics: repository inventory gauges
+                    incoming.setParam("metrics", getMetricsJson());
+                    incoming.setParam("status", "10");
+                    return incoming;
             }
         }
         return null;
