@@ -7,11 +7,15 @@ import io.cresco.library.plugin.Executor;
 import io.cresco.library.plugin.PluginBuilder;
 import io.cresco.library.plugin.PluginService;
 import io.cresco.library.utilities.CLogger;
+import org.apache.felix.hc.api.HealthCheck;
 import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceRegistration;
 import org.osgi.service.component.annotations.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Dictionary;
+import java.util.Hashtable;
 import java.util.Map;
 
 @Component(
@@ -31,6 +35,8 @@ public class Plugin implements PluginService {
     // SLF4J fallback for lifecycle paths where the CLogger is null (before start).
     private static final Logger slog = LoggerFactory.getLogger(Plugin.class);
     private Map<String,Object> map;
+    // Felix HealthCheck registration (central health); best-effort, unregistered on stop
+    private ServiceRegistration<HealthCheck> healthReg;
 
     @Activate
     void activate(BundleContext context, Map<String,Object> map) {
@@ -90,6 +96,9 @@ public class Plugin implements PluginService {
 
                 //set plugin active
                 pluginBuilder.setIsActive(true);
+
+                // Register the central Felix HealthCheck (best-effort; must never break startup).
+                registerHealthCheck((ExecutorImpl) this.executor);
             }
             return true;
         } catch(Exception ex) {
@@ -103,8 +112,27 @@ public class Plugin implements PluginService {
 
     }
 
+    /** Register repo's Felix HealthCheck so CrescoHealthExecutor discovers it. Best-effort. */
+    private void registerHealthCheck(ExecutorImpl exec) {
+        try {
+            Dictionary<String, Object> props = new Hashtable<>();
+            props.put(HealthCheck.NAME, "repo");
+            props.put(HealthCheck.TAGS, new String[]{"local"});
+            healthReg = context.registerService(HealthCheck.class,
+                    new RepoHealthCheck(pluginBuilder, exec), props);
+            logger.info("Registered repo HealthCheck (Felix HC)");
+        } catch (Throwable t) {
+            // health is best-effort: a missing hc.api bundle must never break repo
+            if (logger != null) logger.warn("Could not register repo HealthCheck: " + t.getMessage());
+        }
+    }
+
     @Override
     public boolean isStopped() {
+
+        try {
+            if (healthReg != null) { healthReg.unregister(); healthReg = null; }
+        } catch (Exception ignore) { }
 
         if(pluginBuilder != null) {
             pluginBuilder.setExecutor(null);

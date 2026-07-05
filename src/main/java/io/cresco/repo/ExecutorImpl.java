@@ -72,6 +72,20 @@ public class ExecutorImpl implements Executor {
 
     }
 
+    /** Cheap plugin-jar count for the central HealthCheck (no metric engine dependency). */
+    public int getRepoPluginCount() {
+        try {
+            File repoDir = getRepoDir();
+            if (repoDir != null) {
+                List<Map<String, String>> inv = plugin.getPluginInventory(repoDir.getAbsolutePath());
+                if (inv != null) return inv.size();
+            }
+        } catch (Exception ex) {
+            logger.error("getRepoPluginCount() " + ex.getMessage(), ex);
+        }
+        return 0;
+    }
+
     private synchronized String getMetricsJson() {
         try {
             if (metricEngine == null) {
