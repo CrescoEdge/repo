@@ -239,21 +239,34 @@ public class ExecutorImpl implements Executor {
                 //File jarFile  = getPluginJarFile(pluginName);
                 File repoDir = getRepoDir();
                 if(repoDir != null) {
-                    String jarFileSavePath = repoDir.getAbsolutePath() + "/" + pluginJarFile;
-                    Path path = Paths.get(jarFileSavePath);
-                    Files.write(path, incoming.getDataParam("jardata"));
-                    File jarFileSaved = new File(jarFileSavePath);
-                    if (jarFileSaved.isFile()) {
-                        String md5 = plugin.getMD5(jarFileSavePath);
-                        if (pluginMD5.equals(md5)) {
-                            incoming.setParam("uploaded", pluginName);
-                            incoming.setParam("md5-confirm", md5);
-                        } else {
-                            logger.error("MD5 hash not matched");
-                            logger.error("incoming MD5: " + pluginMD5 + " calculated MD5: " + md5);
-                        }
+                    // CONTAINMENT: the jar file name comes off the wire; legit names are simple
+                    // basenames, so any separator, "..", or absolute path is hostile
+                    Path repoBase = repoDir.toPath().toAbsolutePath().normalize();
+                    Path path = repoBase.resolve(pluginJarFile).normalize();
+                    if (pluginJarFile.contains("/") || pluginJarFile.contains("\\")
+                            || pluginJarFile.contains("..") || !path.startsWith(repoBase)) {
+                        logger.error("putPluginJar: rejecting unsafe jarfile name: [" + pluginJarFile + "]");
                     } else {
-                        logger.error("putPluginJar !jarFileSaved.isFile()");
+                        String jarFileSavePath = path.toString();
+                        Files.write(path, incoming.getDataParam("jardata"));
+                        File jarFileSaved = new File(jarFileSavePath);
+                        if (jarFileSaved.isFile()) {
+                            String md5 = plugin.getMD5(jarFileSavePath);
+                            if (pluginMD5.equals(md5)) {
+                                incoming.setParam("uploaded", pluginName);
+                                incoming.setParam("md5-confirm", md5);
+                            } else {
+                                logger.error("MD5 hash not matched");
+                                logger.error("incoming MD5: " + pluginMD5 + " calculated MD5: " + md5);
+                                // a corrupt partial jar left on disk would be served to installers
+                                // as if it were the real artifact
+                                if (!jarFileSaved.delete()) {
+                                    logger.error("putPluginJar: could not delete corrupt jar " + jarFileSavePath);
+                                }
+                            }
+                        } else {
+                            logger.error("putPluginJar !jarFileSaved.isFile()");
+                        }
                     }
                 } else {
                     logger.error("putPluginJar repoDir != null");
