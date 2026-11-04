@@ -13,8 +13,12 @@ import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.jar.JarFile;
+import java.util.regex.Pattern;
 
 @CrescoCapabilities(namespace = "repo", target = "plugin",
         routingParams = {"region", "agent", "pluginid"},
@@ -29,22 +33,25 @@ import java.util.concurrent.atomic.AtomicBoolean;
         why = "Use to fetch a specific plugin artifact for deployment or caching.",
         params = {
             @CrescoParam(name = "action_pluginname", required = true, description = "plugin symbolic name, e.g. io.cresco.sysinfo"),
-            @CrescoParam(name = "action_pluginmd5", required = true, description = "md5 of the desired jar (integrity + version select)")
+            @CrescoParam(name = "action_pluginmd5", required = true, description = "content hash of the desired jar (integrity + version select)")
         },
         returns = @CrescoReturn(name = "jardata", type = "binary", description = "raw jar bytes (present only if found)")),
-    @CrescoAction(name = "putjar",
-        summary = "Store a plugin JAR into this repo (writes to disk, verifies md5).",
+    @CrescoAction(name = "putjar", roles = {"infra", "admin"},
+        summary = "Store a plugin JAR in this repo. Accepted only if it is signed by a signer that chains to " +
+                  "plugin_signing_truststore; the repo computes its SHA-384 and content hash itself.",
         why = "Use to publish/replicate a plugin artifact into a repo instance.",
         params = {
-            @CrescoParam(name = "pluginname", required = true, description = "plugin symbolic name"),
-            @CrescoParam(name = "md5", required = true, description = "expected md5 of the jar"),
-            @CrescoParam(name = "jarfile", required = true, description = "target jar file name"),
+            @CrescoParam(name = "pluginname", required = true, description = "plugin symbolic name: must match the jar's Bundle-SymbolicName"),
+            @CrescoParam(name = "md5", description = "advisory content hash: a mismatch is refused, a match proves nothing"),
+            @CrescoParam(name = "jarfile", required = true, description = "target jar file name: letters, digits, '.', '_', '-'"),
             @CrescoParam(name = "version", description = "plugin version"),
             @CrescoParam(name = "jardata", type = "binary", required = true, description = "raw jar bytes")
         },
         returns = {
-            @CrescoReturn(name = "uploaded", type = "boolean", description = "true if stored"),
-            @CrescoReturn(name = "md5-confirm", description = "md5 of the stored jar")
+            @CrescoReturn(name = "uploaded", type = "boolean", description = "the plugin name, if stored"),
+            @CrescoReturn(name = "md5-confirm", description = "content hash of the stored jar, computed here"),
+            @CrescoReturn(name = "sha384", description = "SHA-384 of the stored jar, computed here"),
+            @CrescoReturn(name = "status", description = "10 stored; 9 refused (see refusal); 8 bad name; 7 missing params")
         }),
     @CrescoAction(name = "getmetrics",
         summary = "Return repo inventory metrics (plugin count, total bytes on disk) as MeasurementEngine gauges JSON.",
@@ -57,10 +64,22 @@ import java.util.concurrent.atomic.AtomicBoolean;
 })
 public class ExecutorImpl implements Executor {
 
+    /** Verifies a jar that arrived over the network; returns its SHA-384 (lowercase hex) or throws to refuse it. */
+    interface JarVerifier {
+        String verify(Path jar) throws Exception;
+    }
+
+    static final String STAGING_PREFIX = ".repo-";
+    static final String STAGING_SUFFIX = ".part";
+    private static final Pattern JAR_NAME = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9._-]{0,254}");
+
     private PluginBuilder plugin;
     private CLogger logger;
     private Gson gson;
-    private AtomicBoolean lockRepo = new AtomicBoolean();
+    // one landing moves into place at a time; reads never wait for it (a move is atomic)
+    private final Object lockRepo = new Object();
+    private final JarInventory inventory;
+    private volatile JarVerifier jarVerifier;
 
     // B-2 unified metrics: repository inventory size / on-disk footprint as MeasurementEngine gauges.
     private MeasurementEngine metricEngine;
@@ -69,17 +88,25 @@ public class ExecutorImpl implements Executor {
         this.plugin = pluginBuilder;
         logger = plugin.getLogger(ExecutorImpl.class.getName(), CLogger.Level.Info);
         gson = new Gson();
+        inventory = new JarInventory(plugin);
+        // the agent's plugin-signing policy: JarSignatures against plugin_signing_truststore; no trust store, no jar
+        jarVerifier = jar -> plugin.verifyJarSignature(jar);
+    }
 
+    /** Tests: the jar check. */
+    void setJarVerifier(JarVerifier verifier) {
+        this.jarVerifier = verifier;
+    }
+
+    static boolean isStaging(String name) {
+        return name != null && name.startsWith(STAGING_PREFIX) && name.endsWith(STAGING_SUFFIX);
     }
 
     /** Cheap plugin-jar count for the central HealthCheck (no metric engine dependency). */
     public int getRepoPluginCount() {
         try {
             File repoDir = getRepoDir();
-            if (repoDir != null) {
-                List<Map<String, String>> inv = plugin.getPluginInventory(repoDir.getAbsolutePath());
-                if (inv != null) return inv.size();
-            }
+            if (repoDir != null) return inventory.list(repoDir).size();
         } catch (Exception ex) {
             logger.error("getRepoPluginCount() " + ex.getMessage(), ex);
         }
@@ -97,10 +124,10 @@ public class ExecutorImpl implements Executor {
             long bytes = 0L;
             File repoDir = getRepoDir();
             if (repoDir != null) {
-                List<Map<String, String>> inv = plugin.getPluginInventory(repoDir.getAbsolutePath());
-                if (inv != null) { count = inv.size(); }
-                File[] files = repoDir.listFiles((d, n) -> n.toLowerCase().endsWith(".jar"));
-                if (files != null) { for (File f : files) { bytes += f.length(); } }
+                for (JarInventory.Entry e : inventory.list(repoDir)) {
+                    count++;
+                    bytes += e.size;
+                }
             }
             metricEngine.updateIntGauge("repo.plugin.count", count);
             metricEngine.updateLongGauge("repo.bytes", bytes);
@@ -128,24 +155,18 @@ public class ExecutorImpl implements Executor {
     @Override
     public MsgEvent executeEXEC(MsgEvent incoming) {
 
-
-        logger.debug("Processing Exec message : " + incoming.getParams());
+        // the keys only: the values can carry a whole jar
+        logger.debug("Processing Exec message : " + incoming.getParam("action") + " " + incoming.getParams().keySet());
 
         if(incoming.getParams().containsKey("action")) {
             switch (incoming.getParam("action")) {
 
                 case "repolist":
-                    synchronized (lockRepo) {
-                        return repoList(incoming);
-                    }
+                    return repoList(incoming);
                 case "getjar":
-                    synchronized (lockRepo) {
-                        return getPluginJar(incoming);
-                    }
+                    return getPluginJar(incoming);
                 case "putjar":
-                    synchronized (lockRepo) {
-                        return putPluginJar(incoming);
-                    }
+                    return putPluginJar(incoming);
                 case "getmetrics":
                     // B-2 unified metrics: repository inventory gauges
                     incoming.setParam("metrics", getMetricsJson());
@@ -167,13 +188,13 @@ public class ExecutorImpl implements Executor {
 
         try {
             Map<String, List<Map<String, String>>> repoMap = new HashMap<>();
-            List<Map<String, String>> pluginInventory = null;
+            List<Map<String, String>> pluginInventory = new ArrayList<>();
             File repoDir = getRepoDir();
             if (repoDir != null) {
-                pluginInventory = plugin.getPluginInventory(repoDir.getAbsolutePath());
+                for (JarInventory.Entry e : inventory.list(repoDir)) pluginInventory.add(e.asMap());
             }
 
-            repoMap.put("plugins", pluginInventory);
+            repoMap.put("plugins", pluginInventory.isEmpty() ? null : pluginInventory);
 
             List<Map<String, String>> repoInfo = getRepoInfo();
             repoMap.put("server", repoInfo);
@@ -201,7 +222,7 @@ public class ExecutorImpl implements Executor {
         return repoInfo;
     }
 
-    private File getRepoDir() {
+    File getRepoDir() {
         File repoDir = null;
         try {
 
@@ -223,61 +244,93 @@ public class ExecutorImpl implements Executor {
         return repoDir;
     }
 
-
+    /**
+     * putjar (FR-D3): the jar is staged beside the repository under a name the inventory never lists, accepted only if
+     * it is signed by a signer that chains to plugin_signing_truststore (the repo computes its SHA-384 and content hash
+     * itself; a hash the caller supplies is advisory, and one that differs is refused), and moved into place
+     * atomically. Other agents load these jars as bundles: an unsigned or foreign-signed one never lands.
+     */
     private MsgEvent putPluginJar(MsgEvent incoming) {
 
+        Path staged = null;
         try {
-
-
             String pluginName = incoming.getParam("pluginname");
             String pluginMD5 = incoming.getParam("md5");
             String pluginJarFile = incoming.getParam("jarfile");
-            String pluginVersion = incoming.getParam("version");
+            byte[] jarData = incoming.getDataParam("jardata");
+            if (incoming.getParams().containsKey("jardata")) incoming.removeParam("jardata");
 
-            if((pluginName != null) && (pluginMD5 != null) && (pluginJarFile != null) && (pluginVersion != null)) {
-
-                //File jarFile  = getPluginJarFile(pluginName);
-                File repoDir = getRepoDir();
-                if(repoDir != null) {
-                    // CONTAINMENT: the jar file name comes off the wire; legit names are simple
-                    // basenames, so any separator, "..", or absolute path is hostile
-                    Path repoBase = repoDir.toPath().toAbsolutePath().normalize();
-                    Path path = repoBase.resolve(pluginJarFile).normalize();
-                    if (pluginJarFile.contains("/") || pluginJarFile.contains("\\")
-                            || pluginJarFile.contains("..") || !path.startsWith(repoBase)) {
-                        logger.error("putPluginJar: rejecting unsafe jarfile name: [" + pluginJarFile + "]");
-                    } else {
-                        String jarFileSavePath = path.toString();
-                        Files.write(path, incoming.getDataParam("jardata"));
-                        File jarFileSaved = new File(jarFileSavePath);
-                        if (jarFileSaved.isFile()) {
-                            String md5 = plugin.getMD5(jarFileSavePath);
-                            if (pluginMD5.equals(md5)) {
-                                incoming.setParam("uploaded", pluginName);
-                                incoming.setParam("md5-confirm", md5);
-                            } else {
-                                logger.error("MD5 hash not matched");
-                                logger.error("incoming MD5: " + pluginMD5 + " calculated MD5: " + md5);
-                                // a corrupt partial jar left on disk would be served to installers
-                                // as if it were the real artifact
-                                if (!jarFileSaved.delete()) {
-                                    logger.error("putPluginJar: could not delete corrupt jar " + jarFileSavePath);
-                                }
-                            }
-                        } else {
-                            logger.error("putPluginJar !jarFileSaved.isFile()");
-                        }
-                    }
-                } else {
-                    logger.error("putPluginJar repoDir != null");
-                }
-            } else {
+            if (pluginName == null || pluginJarFile == null || jarData == null) {
                 logger.error("putPluginJar: Missing data!");
+                incoming.setParam("status", "7");
+                incoming.setParam("status_desc", "missing required putjar params (pluginname, jarfile, jardata)");
+                return incoming;
             }
+            // CONTAINMENT: the jar file name comes off the wire; legit names are simple basenames
+            if (!JAR_NAME.matcher(pluginJarFile).matches() || pluginJarFile.contains("..") || isStaging(pluginJarFile)) {
+                logger.error("putPluginJar: rejecting unsafe jarfile name: [" + pluginJarFile + "]");
+                incoming.setParam("status", "8");
+                incoming.setParam("status_desc", "invalid jarfile name");
+                return incoming;
+            }
+            File repoDir = getRepoDir();
+            if (repoDir == null) {
+                incoming.setParam("status", "6");
+                incoming.setParam("status_desc", "no repository directory");
+                return incoming;
+            }
+            Path target = repoDir.toPath().resolve(pluginJarFile);
+            staged = target.resolveSibling(STAGING_PREFIX + UUID.randomUUID().toString().replace("-", "") + STAGING_SUFFIX);
+            Files.write(staged, jarData, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            jarData = null;
 
+            String sha384;
+            try {
+                sha384 = jarVerifier.verify(staged);
+            } catch (Exception refused) {
+                logger.warn("putjar " + pluginJarFile + " refused: " + refused.getMessage());
+                incoming.setParam("status", "9");
+                incoming.setParam("status_desc", "jar refused: " + refused.getMessage());
+                incoming.setParam("refusal", "signature");
+                return incoming;
+            }
+            String contentHash = plugin.getMD5(staged.toString());
+            if (contentHash == null) {
+                incoming.setParam("status", "6");
+                incoming.setParam("status_desc", "the staged jar could not be read back");
+                return incoming;
+            }
+            if (pluginMD5 != null && !pluginMD5.equals(contentHash)) {
+                logger.error("putjar: incoming md5 " + pluginMD5 + " differs from the computed " + contentHash);
+                incoming.setParam("status", "9");
+                incoming.setParam("status_desc", "the jar's content hash differs from the md5 supplied, upload rejected");
+                return incoming;
+            }
+            String declared = symbolicName(staged);
+            if (declared != null && !declared.equals(pluginName)) {
+                incoming.setParam("status", "9");
+                incoming.setParam("status_desc", "pluginname does not match the jar's Bundle-SymbolicName");
+                return incoming;
+            }
+            synchronized (lockRepo) {
+                Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            }
+            staged = null;
+            incoming.setParam("uploaded", pluginName);
+            incoming.setParam("md5-confirm", contentHash);
+            incoming.setParam("sha384", sha384);
+            incoming.setParam("status", "10");
+            incoming.setParam("status_desc", "uploaded");
 
         } catch(Exception ex){
             logger.error("putPluginJar error", ex);
+            incoming.setParam("status", "6");
+            incoming.setParam("status_desc", "putjar error: " + ex.getClass().getSimpleName());
+        } finally {
+            // a partial, refused or unverified jar is never left where the inventory would list and serve it
+            if (staged != null) {
+                try { Files.deleteIfExists(staged); } catch (Exception ignore) { }
+            }
         }
 
         if(incoming.getParams().containsKey("jardata")) {
@@ -287,74 +340,67 @@ public class ExecutorImpl implements Executor {
         return incoming;
     }
 
-
-
-    private File getPluginJarFile(String requestPluginName) {
-        File jarFile = null;
-        try {
-
-                File repoDir = getRepoDir();
-                if (repoDir != null) {
-
-                    List<Map<String, String>> pluginInventory = plugin.getPluginInventory(repoDir.getAbsolutePath());
-                    if(pluginInventory != null) {
-                        for (Map<String, String> repoMap : pluginInventory) {
-
-                            if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
-                                String pluginName = repoMap.get("pluginname");
-                                String pluginMD5 = repoMap.get("md5");
-                                String pluginJarFile = repoMap.get("jarfile");
-
-                                if (pluginName.equals(requestPluginName)) {
-                                    jarFile = new File(repoDir + "/" + pluginJarFile);
-                                }
-                            }
-                        }
-                    }
-                }
-
-        } catch(Exception ex) {
-            logger.error("getPluginJarFile error", ex);
+    /** The jar's Bundle-SymbolicName without directives, or null. */
+    private static String symbolicName(Path jar) {
+        try (JarFile jf = new JarFile(jar.toFile(), false)) {
+            if (jf.getManifest() == null) return null;
+            String v = jf.getManifest().getMainAttributes().getValue("Bundle-SymbolicName");
+            if (v == null) return null;
+            int semi = v.indexOf(';');
+            return (semi < 0 ? v : v.substring(0, semi)).trim();
+        } catch (Exception ex) {
+            return null;
         }
-        return jarFile;
     }
 
+    /**
+     * getjar: the inventory is cached by size, mtime and file key (it used to re-hash every jar on every call); the
+     * bytes sent are rechecked against the requested hash, so a jar changed in place is never served under its old hash.
+     */
     private MsgEvent getPluginJar(MsgEvent incoming) {
 
         try {
-            if ((incoming.getParam("action_pluginname") != null) && (incoming.getParam("action_pluginmd5") != null)) {
-                String requestPluginName = incoming.getParam("action_pluginname");
-                String requestPluginMD5 = incoming.getParam("action_pluginmd5");
-
-                File repoDir = getRepoDir();
-                if (repoDir != null) {
-
-                    List<Map<String, String>> pluginInventory = plugin.getPluginInventory(repoDir.getAbsolutePath());
-                    if(pluginInventory != null) {
-                        for (Map<String, String> repoMap : pluginInventory) {
-
-                            if (repoMap.containsKey("pluginname") && repoMap.containsKey("md5") && repoMap.containsKey("jarfile")) {
-                                String pluginName = repoMap.get("pluginname");
-                                String pluginMD5 = repoMap.get("md5");
-                                String pluginJarFile = repoMap.get("jarfile");
-
-                                if (pluginName.equals(requestPluginName) && pluginMD5.equals(requestPluginMD5)) {
-
-                                    Path jarPath = Paths.get(repoDir + "/" + pluginJarFile);
-                                    incoming.setDataParam("jardata", java.nio.file.Files.readAllBytes(jarPath));
-
-                                }
-                            }
-
-                        }
+            String requestPluginName = incoming.getParam("action_pluginname");
+            String requestPluginMD5 = incoming.getParam("action_pluginmd5");
+            if (requestPluginName == null || requestPluginMD5 == null) {
+                incoming.setParam("status", "8");
+                incoming.setParam("status_desc", "getjar takes action_pluginname and action_pluginmd5");
+                return incoming;
+            }
+            File repoDir = getRepoDir();
+            if (repoDir != null) {
+                for (JarInventory.Entry e : inventory.list(repoDir)) {
+                    if (!requestPluginName.equals(e.pluginname) || !requestPluginMD5.equals(e.md5)) continue;
+                    Path jarPath = repoDir.toPath().resolve(e.jarfile);
+                    byte[] data = Files.readAllBytes(jarPath);
+                    if (!requestPluginMD5.equals(contentHash(data))) {
+                        inventory.invalidate(jarPath);
+                        incoming.setParam("status", "9");
+                        incoming.setParam("status_desc", "the jar changed since it was listed; list again");
+                        return incoming;
                     }
+                    incoming.setDataParam("jardata", data);
+                    incoming.setParam("status", "10");
+                    return incoming;
                 }
             }
+            incoming.setParam("status", "9");
+            incoming.setParam("status_desc", "no such jar");
         } catch(Exception ex) {
             logger.error("getPluginJar error", ex);
+            incoming.setParam("status", "7");
+            incoming.setParam("status_desc", "getjar error: " + ex.getClass().getSimpleName());
         }
         return incoming;
     }
 
+    /** The library's content hash (what getMD5 and the inventory report) of bytes in memory. */
+    static String contentHash(byte[] data) throws Exception {
+        MessageDigest md = MessageDigest.getInstance(io.cresco.library.crypto.CrescoCrypto.CONTENT_HASH_ALG);
+        byte[] d = md.digest(data);
+        StringBuilder sb = new StringBuilder(d.length * 2);
+        for (byte x : d) sb.append(Character.forDigit((x >> 4) & 0xF, 16)).append(Character.forDigit(x & 0xF, 16));
+        return sb.toString();
+    }
 
 }

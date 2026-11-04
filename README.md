@@ -9,6 +9,33 @@ Part of the **[Cresco](https://github.com/CrescoEdge/agent)** edge-computing fra
 
 A Cresco plugin that stores, reports on, and deploys other plugins within the fabric. Loaded by the controller.
 
+## Actions and security
+
+| Action | Roles | Purpose |
+|---|---|---|
+| `repolist` | default | The plugin jars here (name, content hash, file, version) and this repo's identity. |
+| `getjar` | default | A jar's bytes by `action_pluginname` + `action_pluginmd5`; the bytes sent are rechecked against the hash. |
+| `putjar` | **infra, admin** | Store a plugin jar (see below). |
+| `getmetrics`, `getcapabilities` | default | Metrics, capability document. |
+
+Roles are enforced by the agent before the repo runs (`@CrescoAction(roles=...)`; the controller's
+`docs/caller-authorization.md`); "default" is any caller of this agent's tenant, and `infra`.
+
+**putjar accepts only signed jars.** Other agents load these jars as bundles, so a jar lands only if every entry is
+signed by a signer that chains to the agent's `plugin_signing_truststore` (the library's `JarSignatures`, through
+`PluginBuilder.verifyJarSignature`); unsigned, partially signed, tampered and foreign-signed jars are refused
+(`status 9`, `refusal=signature`), and with no trust store configured every jar is. The repo computes the jar's
+content hash (`md5-confirm`) and SHA-384 (`sha384`) itself; an `md5` the caller supplies is advisory, and one that
+differs is refused. `pluginname` must be the jar's `Bundle-SymbolicName`, and `jarfile` a plain file name. The jar is
+staged under a name the inventory never lists and moved into place atomically, so a partial or refused jar is never
+served. `plugin_signing_required=false` (an agent setting) lets unsigned jars through for development only, and the
+repo logs a WARNING at start when it is set, or when no trust store is configured.
+
+The inventory caches each jar's hash and manifest by size, mtime and file key, instead of re-hashing every jar on
+every `repolist` and `getjar`.
+
+Statuses: `10` done; `9` refused or not found; `8` bad name or params; `7` missing params; `6` error.
+
 ## Build
 
 ```bash
@@ -21,6 +48,7 @@ dependencies). A plain `mvn package`/`install` produces a non-bundle jar that th
 cannot start. Output: `target/repo-1.3-SNAPSHOT.jar`.
 
 Requires `io.cresco:library` in your local Maven repository — build [library](https://github.com/CrescoEdge/library) first.
+`mvn package` runs the JUnit tests (signing keys are made at test time with the JDK's keytool).
 
 ## Cresco framework
 
