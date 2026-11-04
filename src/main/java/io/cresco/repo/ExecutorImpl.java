@@ -11,6 +11,7 @@ import io.cresco.library.utilities.CLogger;
 
 import java.io.*;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
@@ -88,9 +89,11 @@ public class ExecutorImpl implements Executor {
         this.plugin = pluginBuilder;
         logger = plugin.getLogger(ExecutorImpl.class.getName(), CLogger.Level.Info);
         gson = new Gson();
-        inventory = new JarInventory(plugin);
         // the agent's plugin-signing policy: JarSignatures against plugin_signing_truststore; no trust store, no jar
         jarVerifier = jar -> plugin.verifyJarSignature(jar);
+        // the repo names jars by their hash (no extension): every file in its directory is a candidate; only verified
+        // ones are listed or served, whoever put them there
+        inventory = new JarInventory(n -> true, jar -> jarVerifier.verify(jar));
     }
 
     /** Tests: the jar check. */
@@ -245,14 +248,16 @@ public class ExecutorImpl implements Executor {
     }
 
     /**
-     * putjar (FR-D3): the jar is staged beside the repository under a name the inventory never lists, accepted only if
-     * it is signed by a signer that chains to plugin_signing_truststore (the repo computes its SHA-384 and content hash
-     * itself; a hash the caller supplies is advisory, and one that differs is refused), and moved into place
-     * atomically. Other agents load these jars as bundles: an unsigned or foreign-signed one never lands.
+     * putjar (FR-D3): the bytes are pinned. They are written to a staging file in a directory only this agent's user can
+     * write, verified there (the agent's plugin-signing policy: signed by a signer that chains to
+     * plugin_signing_truststore), and every hash and the bundle name come from the bytes in memory. The staged file is
+     * checked against those bytes after verification and again in place after the atomic move; on any difference
+     * nothing is stored. A hash the caller supplies is advisory, and one that differs is refused.
      */
     private MsgEvent putPluginJar(MsgEvent incoming) {
 
         Path staged = null;
+        Path landed = null;
         try {
             String pluginName = incoming.getParam("pluginname");
             String pluginMD5 = incoming.getParam("md5");
@@ -279,14 +284,29 @@ public class ExecutorImpl implements Executor {
                 incoming.setParam("status_desc", "no repository directory");
                 return incoming;
             }
-            Path target = repoDir.toPath().resolve(pluginJarFile);
-            staged = target.resolveSibling(STAGING_PREFIX + UUID.randomUUID().toString().replace("-", "") + STAGING_SUFFIX);
-            Files.write(staged, jarData, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
-            jarData = null;
+            // what was sent, pinned in memory
+            String sha384 = digestHex("SHA-384", jarData);
+            String contentHash = contentHash(jarData);
+            if (pluginMD5 != null && !pluginMD5.equals(contentHash)) {
+                logger.error("putjar: incoming md5 " + pluginMD5 + " differs from the computed " + contentHash);
+                incoming.setParam("status", "9");
+                incoming.setParam("status_desc", "the jar's content hash differs from the md5 supplied, upload rejected");
+                return incoming;
+            }
+            String declared = symbolicName(jarData);
+            if (declared != null && !declared.equals(pluginName)) {
+                incoming.setParam("status", "9");
+                incoming.setParam("status_desc", "pluginname does not match the jar's Bundle-SymbolicName");
+                return incoming;
+            }
 
-            String sha384;
+            Path target = repoDir.toPath().resolve(pluginJarFile);
+            staged = privateStaging(repoDir.toPath()).resolve(STAGING_PREFIX + UUID.randomUUID().toString().replace("-", "") + STAGING_SUFFIX);
+            Files.write(staged, jarData, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+
+            String verified;
             try {
-                sha384 = jarVerifier.verify(staged);
+                verified = jarVerifier.verify(staged);
             } catch (Exception refused) {
                 logger.warn("putjar " + pluginJarFile + " refused: " + refused.getMessage());
                 incoming.setParam("status", "9");
@@ -294,28 +314,31 @@ public class ExecutorImpl implements Executor {
                 incoming.setParam("refusal", "signature");
                 return incoming;
             }
-            String contentHash = plugin.getMD5(staged.toString());
-            if (contentHash == null) {
-                incoming.setParam("status", "6");
-                incoming.setParam("status_desc", "the staged jar could not be read back");
-                return incoming;
-            }
-            if (pluginMD5 != null && !pluginMD5.equals(contentHash)) {
-                logger.error("putjar: incoming md5 " + pluginMD5 + " differs from the computed " + contentHash);
+            // the verifier read the staged file: it must have read exactly the bytes that were sent, and the file must
+            // still hold them
+            if (!sha384.equals(verified) || !sha384.equals(fileSha384(staged))) {
+                logger.error("putjar " + pluginJarFile + ": the staged jar changed during verification; refused");
                 incoming.setParam("status", "9");
-                incoming.setParam("status_desc", "the jar's content hash differs from the md5 supplied, upload rejected");
-                return incoming;
-            }
-            String declared = symbolicName(staged);
-            if (declared != null && !declared.equals(pluginName)) {
-                incoming.setParam("status", "9");
-                incoming.setParam("status_desc", "pluginname does not match the jar's Bundle-SymbolicName");
+                incoming.setParam("status_desc", "jar refused: the staged jar changed while it was verified");
+                incoming.setParam("refusal", "changed");
                 return incoming;
             }
             synchronized (lockRepo) {
                 Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                staged = null;
+                landed = target;
+                // in place, it is still exactly what was verified; otherwise it does not stay
+                if (!sha384.equals(fileSha384(target))) {
+                    Files.deleteIfExists(target);
+                    landed = null;
+                    logger.error("putjar " + pluginJarFile + ": the jar changed while it was moved into place; removed");
+                    incoming.setParam("status", "9");
+                    incoming.setParam("status_desc", "jar refused: it changed while it was moved into place");
+                    incoming.setParam("refusal", "changed");
+                    return incoming;
+                }
             }
-            staged = null;
+            inventory.invalidate(target);
             incoming.setParam("uploaded", pluginName);
             incoming.setParam("md5-confirm", contentHash);
             incoming.setParam("sha384", sha384);
@@ -340,11 +363,53 @@ public class ExecutorImpl implements Executor {
         return incoming;
     }
 
-    /** The jar's Bundle-SymbolicName without directives, or null. */
-    private static String symbolicName(Path jar) {
-        try (JarFile jf = new JarFile(jar.toFile(), false)) {
-            if (jf.getManifest() == null) return null;
-            String v = jf.getManifest().getMainAttributes().getValue("Bundle-SymbolicName");
+    /**
+     * A staging directory beside the repository (same filesystem, so the final move is an atomic rename) that only this
+     * agent's user may enter or write: nobody else can rename a file over a jar while it is verified.
+     */
+    private Path privateStaging(Path repoDir) throws IOException {
+        Path dir = repoDir.toAbsolutePath().getParent().resolve(".repo-staging");
+        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Files.createDirectory(dir, java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+                        java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")));
+            } catch (UnsupportedOperationException noPosix) {
+                Files.createDirectory(dir);
+            } catch (java.nio.file.FileAlreadyExistsException race) {
+                // made meanwhile; checked below
+            }
+        }
+        if (Files.isSymbolicLink(dir) || !Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("the staging directory is not a directory");
+        }
+        try {
+            Files.setPosixFilePermissions(dir, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+        } catch (UnsupportedOperationException noPosix) {
+            // not a POSIX filesystem
+        }
+        return dir;
+    }
+
+    private static String fileSha384(Path p) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-384");
+        try (java.io.InputStream in = Files.newInputStream(p)) {
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = in.read(buf)) != -1) md.update(buf, 0, n);
+        }
+        return JarInventory.hex(md.digest());
+    }
+
+    private static String digestHex(String alg, byte[] data) throws Exception {
+        return JarInventory.hex(MessageDigest.getInstance(alg).digest(data));
+    }
+
+    /** The bundle's Bundle-SymbolicName without directives, read from the bytes in memory; null if none. */
+    private static String symbolicName(byte[] jar) {
+        try (java.util.jar.JarInputStream in = new java.util.jar.JarInputStream(new java.io.ByteArrayInputStream(jar))) {
+            java.util.jar.Manifest mf = in.getManifest();
+            if (mf == null) return null;
+            String v = mf.getMainAttributes().getValue("Bundle-SymbolicName");
             if (v == null) return null;
             int semi = v.indexOf(';');
             return (semi < 0 ? v : v.substring(0, semi)).trim();

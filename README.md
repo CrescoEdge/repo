@@ -31,8 +31,15 @@ staged under a name the inventory never lists and moved into place atomically, s
 served. `plugin_signing_required=false` (an agent setting) lets unsigned jars through for development only, and the
 repo logs a WARNING at start when it is set, or when no trust store is configured.
 
-The inventory caches each jar's hash and manifest by size, mtime and file key, instead of re-hashing every jar on
-every `repolist` and `getjar`.
+**The bytes verified are the bytes stored.** The jar is staged in `.repo-staging` beside the repository, a directory
+only the agent's user can enter; its hashes and bundle name come from the bytes received, the verifier must have read
+exactly those bytes, the staged file must still hold them, and after the atomic move the stored jar is checked once
+more: on any difference nothing is stored (`refusal=changed`).
+
+**Only verified jars are listed or served.** `repolist` and `getjar` show a jar only if it passes the same signature
+check, whatever door it came in by (a file copied into the directory by hand included). The inventory caches each
+jar's manifest, verification and hash by size, mtime and file key, so a jar is verified and hashed once, not on every
+`repolist` and `getjar`.
 
 Statuses: `10` done; `9` refused or not found; `8` bad name or params; `7` missing params; `6` error.
 
@@ -44,7 +51,8 @@ Statuses: `10` done; `9` refused or not found; `8` bad name or params; `7` missi
   is refused, and the repo logs a WARNING at start.
 - `pluginname` must equal the jar's `Bundle-SymbolicName`; `md5` is optional (when sent it must match); every reply
   carries `status`, and `sha384` on success.
-- Files in the repository directory without a `Bundle-SymbolicName` are no longer listed by `repolist`.
+- Files in the repository directory without a `Bundle-SymbolicName`, or that fail signature verification, are no
+  longer listed by `repolist` or served by `getjar`, however they got there.
 
 ## Build
 

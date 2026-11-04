@@ -201,6 +201,44 @@ class PutJarTest {
         assertNull(stale.getDataParam("jardata"));
     }
 
+    @Test
+    void aJarSwappedAfterVerificationIsNeverStored() throws Exception {
+        byte[] good = JarSigning.signedJar("io.cresco.example", "v1");
+        byte[] evil = JarSigning.unsignedJar("io.cresco.example", "evil");
+        exec.setJarVerifier(p -> {
+            String h = plugin.verifyJarSignature(p);
+            Files.write(p, evil);   // the staged file changes after it was verified
+            return h;
+        });
+        MsgEvent r = putjar("io.cresco.example", "example.jar", good);
+        assertEquals("9", r.getParam("status"), r.getParams().toString());
+        assertEquals("changed", r.getParam("refusal"));
+        assertFalse(Files.exists(exec.getRepoDir().toPath().resolve("example.jar")));
+        assertNothingStaged();
+        // the staging directory is the agent user's alone
+        Path staging = exec.getRepoDir().toPath().getParent().resolve(".repo-staging");
+        assertEquals("rwx------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(staging)));
+    }
+
+    @Test
+    void aJarThatDidNotPassVerificationIsNeverListedOrServed() throws Exception {
+        // dropped straight into the directory, by any door other than putjar
+        byte[] unsigned = JarSigning.unsignedJar("io.cresco.sysinfo", "not signed by anyone");
+        Files.write(exec.getRepoDir().toPath().resolve("dropped.jar"), unsigned);
+        byte[] foreign = JarSigning.foreignSignedJar("io.cresco.stunnel", "signed by a stranger");
+        Files.write(exec.getRepoDir().toPath().resolve("foreign.jar"), foreign);
+        assertEquals("9", getjar("io.cresco.sysinfo", ExecutorImpl.contentHash(unsigned)).getParam("status"));
+        assertEquals("9", getjar("io.cresco.stunnel", ExecutorImpl.contentHash(foreign)).getParam("status"));
+        MsgEvent list = new MsgEvent(MsgEvent.Type.EXEC, "region-1", "agent-1", null, "region-1", "agent-1", "plugin-0", false, false);
+        list.setParam("action", "repolist");
+        String inv = exec.executeEXEC(list).getCompressedParam("repolist");
+        assertFalse(inv.contains("io.cresco.sysinfo") || inv.contains("io.cresco.stunnel"), inv);
+        // a signed one, dropped the same way, is listed: verification decides, not the door
+        byte[] signed = JarSigning.signedJar("io.cresco.example", "v1");
+        Files.write(exec.getRepoDir().toPath().resolve("signed.jar"), signed);
+        assertEquals("10", getjar("io.cresco.example", ExecutorImpl.contentHash(signed)).getParam("status"));
+    }
+
     static byte[] tamper(byte[] jar) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (ZipInputStream zin = new ZipInputStream(new java.io.ByteArrayInputStream(jar));
