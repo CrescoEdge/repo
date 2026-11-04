@@ -36,6 +36,16 @@ every `repolist` and `getjar`.
 
 Statuses: `10` done; `9` refused or not found; `8` bad name or params; `7` missing params; `6` error.
 
+## Upgrade notes (1.3 hardening)
+
+- `putjar` needs the `infra` or `admin` role (the global controller's plugin upload sends it as `infra`).
+- `putjar` accepts only jars signed by a signer chaining to the agent's `plugin_signing_truststore`: configure the
+  trust store on every agent that runs a repo **before upgrading**, and sign plugin jars. Without one every `putjar`
+  is refused, and the repo logs a WARNING at start.
+- `pluginname` must equal the jar's `Bundle-SymbolicName`; `md5` is optional (when sent it must match); every reply
+  carries `status`, and `sha384` on success.
+- Files in the repository directory without a `Bundle-SymbolicName` are no longer listed by `repolist`.
+
 ## Build
 
 ```bash
